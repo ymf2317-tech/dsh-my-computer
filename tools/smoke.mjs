@@ -12,6 +12,7 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -119,7 +120,7 @@ console.log('  临时目录：' + TMP_DIR)
 
 section('路由注册')
 
-checkEqual('注册了 11 条路由', registered.length, 11)
+checkEqual('注册了 12 条路由', registered.length, 12)
 for (const route of registered) {
   const name = route.path.slice(route.path.lastIndexOf('/') + 1)
   const bodyModeOk = route.requestBody === 'buffered' || route.requestBody === 'streaming'
@@ -342,8 +343,60 @@ check('Content-Disposition 是 attachment',
 check('Content-Type 有值', Boolean(dl.headers.get('content-type')), String(dl.headers.get('content-type')))
 
 const dlDir = await call('download', { query: q({ path: TMP_DIR }) })
-checkEqual('下载目录 → 422（MVP 不做 zip）', dlDir.status, 422)
-checkEqual('下载目录 → DIRECTORY_NOT_SUPPORTED', dlDir.data.error && dlDir.data.error.code, 'DIRECTORY_NOT_SUPPORTED')
+checkEqual('用 /download 下目录 → 400（应改用 download-dir）', dlDir.status, 400)
+checkEqual('错误码提示 IS_DIRECTORY', dlDir.data.error && dlDir.data.error.code, 'IS_DIRECTORY')
+
+/* ---------------- GET /download-dir（整目录 zip） ---------------- */
+
+section('GET /download-dir（zip 打包）')
+
+const zipSrc = path.join(TMP_DIR, '打包测试')
+await fsp.mkdir(path.join(zipSrc, '空目录'), { recursive: true })
+await fsp.mkdir(path.join(zipSrc, '子目录'), { recursive: true })
+const zipFileA = path.join(zipSrc, 'a.txt')
+const zipFileB = path.join(zipSrc, '子目录', '中文名.md')
+await fsp.writeFile(zipFileA, 'hello zip\n'.repeat(50), 'utf8')
+await fsp.writeFile(zipFileB, '# 中文内容\n'.repeat(30), 'utf8')
+
+const zipRes = await call('download-dir', { query: q({ path: zipSrc }), raw: true })
+checkEqual('/download-dir 状态码 200', zipRes.status, 200)
+checkEqual('Content-Type 是 application/zip', String(zipRes.headers.get('content-type')), 'application/zip')
+check('Content-Disposition 是 <目录名>.zip',
+  String(zipRes.headers.get('content-disposition') || '').includes(encodeURIComponent('打包测试') + '.zip'),
+  String(zipRes.headers.get('content-disposition') || ''))
+const zipBuf = Buffer.from(await zipRes.arrayBuffer())
+check('ZIP 魔数正确', zipBuf.readUInt32LE(0) === 0x04034b50, zipBuf.length + ' 字节')
+
+let zipEntries = []
+let zipError = ''
+try {
+  zipEntries = parseZip(zipBuf)
+} catch (error) {
+  zipError = String(error && error.message)
+}
+const zipNames = zipEntries.map((entry) => entry.name).sort()
+check('zip 能解析出条目', zipError === '', zipError || zipNames.join(' | '))
+check('zip 含两个文件', zipNames.filter((name) => !name.endsWith('/')).length === 2, zipNames.join(' | '))
+check('zip 保留中文文件名', zipNames.some((name) => name.includes('中文名.md')))
+check('zip 保留空目录', zipNames.some((name) => name.endsWith('空目录/')), zipNames.join(' | '))
+
+const entryA = zipEntries.find((entry) => entry.name.endsWith('a.txt'))
+const entryB = zipEntries.find((entry) => entry.name.endsWith('中文名.md'))
+check('a.txt 内容与磁盘一致', Boolean(entryA) && entryA.data.equals(await fsp.readFile(zipFileA)))
+check('中文名.md 内容与磁盘一致', Boolean(entryB) && entryB.data.equals(await fsp.readFile(zipFileB)))
+check('每个条目 CRC 都对',
+  zipEntries.every((entry) => crc32Of(entry.data) === entry.crc),
+  zipEntries.map((entry) => entry.name + ':' + (crc32Of(entry.data) === entry.crc ? 'ok' : 'BAD')).join(' '))
+
+const zipEmpty = await call('download-dir', { query: q({ path: path.join(zipSrc, '空目录') }) })
+checkEqual('打包空目录 → 400', zipEmpty.status, 400)
+checkEqual('错误码 ZIP_EMPTY', zipEmpty.data.error && zipEmpty.data.error.code, 'ZIP_EMPTY')
+
+const zipOnFile = await call('download-dir', { query: q({ path: zipFileA }) })
+checkEqual('对文件用 download-dir → 400', zipOnFile.status, 400)
+
+const zipMissing = await call('download-dir', { query: q({ path: path.join(TMP_DIR, '没有这个目录') }) })
+checkEqual('打包不存在的目录 → 404', zipMissing.status, 404)
 
 section('POST /move')
 
@@ -394,4 +447,43 @@ if (passed !== total) {
 
 async function readByteLength(text) {
   return Buffer.byteLength(text, 'utf8')
+}
+
+/** 只够自检用的 zip 读取：走中央目录，支持 STORE(0) 与 DEFLATE(8)。 */
+function parseZip(buf) {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
+  if (eocd < 0) throw new Error('找不到中央目录结尾（EOCD）')
+  const count = buf.readUInt16LE(eocd + 10)
+  let offset = buf.readUInt32LE(eocd + 16)
+  const out = []
+  for (let i = 0; i < count; i += 1) {
+    if (buf.readUInt32LE(offset) !== 0x02014b50) throw new Error('中央目录签名不对 @' + offset)
+    const flags = buf.readUInt16LE(offset + 8)
+    const method = buf.readUInt16LE(offset + 10)
+    const crc = buf.readUInt32LE(offset + 16)
+    const compSize = buf.readUInt32LE(offset + 20)
+    const size = buf.readUInt32LE(offset + 24)
+    const nameLen = buf.readUInt16LE(offset + 28)
+    const extraLen = buf.readUInt16LE(offset + 30)
+    const commentLen = buf.readUInt16LE(offset + 32)
+    const localOffset = buf.readUInt32LE(offset + 42)
+    const name = buf.slice(offset + 46, offset + 46 + nameLen).toString('utf8')
+    offset += 46 + nameLen + extraLen + commentLen
+    if (buf.readUInt32LE(localOffset) !== 0x04034b50) throw new Error('本地头签名不对：' + name)
+    const localNameLen = buf.readUInt16LE(localOffset + 26)
+    const localExtraLen = buf.readUInt16LE(localOffset + 28)
+    const dataStart = localOffset + 30 + localNameLen + localExtraLen
+    const raw = buf.slice(dataStart, dataStart + compSize)
+    let data
+    if (method === 0) data = raw
+    else if (method === 8) data = zlib.inflateRawSync(raw)
+    else throw new Error('不支持的压缩方法 ' + method + '：' + name)
+    out.push({ name, flags, method, crc, compSize, size, data })
+  }
+  return out
+}
+
+function crc32Of(buffer) {
+  // Node 24 自带 zlib.crc32，省得在自检里再维护一张表
+  return zlib.crc32(buffer) >>> 0
 }

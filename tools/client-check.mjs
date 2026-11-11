@@ -130,10 +130,16 @@ check('exports.inject 是数组', Array.isArray(mod.inject), JSON.stringify(mod.
 section('apply(ctx) 注册的 slots')
 
 const registrations = []
+const tabRegistrations = []
 const fakeClientCtx = {
   effect(fn) {
     const dispose = fn()
     return typeof dispose === 'function' ? dispose : () => {}
+  },
+  // 真实宿主里 ctx.inject(names, cb) 会把依赖就绪后的服务集合交给 cb。
+  // 这里直接把 ctx 自己给过去（slots / sidebarRightTabs 都在上面）。
+  inject(names, callback) {
+    return callback(fakeClientCtx)
   },
   slots: {
     inject(name, callback) {
@@ -141,6 +147,12 @@ const fakeClientCtx = {
     },
     register(spec, component) {
       registrations.push({ spec, component })
+      return () => {}
+    },
+  },
+  sidebarRightTabs: {
+    register(spec) {
+      tabRegistrations.push(spec)
       return () => {}
     },
   },
@@ -153,7 +165,7 @@ try {
   applyError = error
 }
 check('apply(ctx) 没抛异常', applyError === null, applyError ? String(applyError) : '')
-check('注册了 2 个 slot', registrations.length === 2, registrations.map((r) => r.spec && r.spec.name).join(', '))
+check('注册了 >=2 个 slot', registrations.length >= 2, registrations.map((r) => r.spec && r.spec.name).join(', '))
 check('注入了 <style>（样式跟随主题）', styleNodes.length === 1, styleNodes.length + ' 个 style 节点')
 
 const side = registrations.find((r) => r.spec && r.spec.name === 'sidebar.panellist')
@@ -172,6 +184,15 @@ check('侧栏图标是函数组件', side && typeof side.component === 'function
 check('有 main 注册', Boolean(main))
 check('main.key 与侧栏 id 一致', main && side && main.spec.key === side.spec.id, main ? String(main.spec.key) : '')
 check('面板是函数组件', main && typeof main.component === 'function')
+
+/* 右栏 tab 三件套（sidebarRightTabs + pane.tab + pane.tab.title） */
+const tab = tabRegistrations.find((spec) => spec && spec.id === 'my-computer')
+const paneTab = registrations.find((r) => r.spec && r.spec.name === 'sidebar.right.pane.tab')
+const paneTitle = registrations.find((r) => r.spec && r.spec.name === 'sidebar.right.pane.tab.title')
+check('有 sidebarRightTabs 注册', Boolean(tab))
+check('guide 非空（否则不进右栏「+」菜单）', Boolean(tab && Array.isArray(tab.guide) && tab.guide.length > 0))
+check('右栏 pane.tab key 与 tab id 一致', Boolean(paneTab && tab && paneTab.spec.key === tab.id))
+check('右栏 pane.tab.title 也注册了', Boolean(paneTitle && paneTitle.spec.key === 'my-computer'))
 
 /* ------------------------------------------------------------------ *
  * 手搭一个只够跑首屏的渲染器：真 React.createElement + 最小 hook dispatcher
