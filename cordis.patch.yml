@@ -1,0 +1,11 @@
+# dsh-my-computer bundle patch
+#
+# 把插件挂进 profile 的 cordis 树。
+#   id   : 树内唯一标识（客户端侧栏面板 id 也叫 my-computer，但那是另一套命名空间，互不影响）
+#   name : 必须是本包的 package.json name
+#
+# 默认配置项可以在这里加 config:（例如 enabled: false 可临时关掉整片路由，
+# 见 lib/index.js 的 apply()）。
+- insert:
+    - id: my-computer
+      name: 'dsh-my-computer'

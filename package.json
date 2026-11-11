@@ -1,0 +1,58 @@
+{
+  "name": "dsh-my-computer",
+  "version": "0.1.0",
+  "description": "DSH Web 右栏「我的电脑」：远程浏览与操作整台 Windows 磁盘（跨盘符、不受会话工作区限制）",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "tools",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "file-manager",
+    "windows",
+    "remote"
+  ],
+  "author": "ymf2317",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ymf2317-tech/dsh-my-computer.git"
+  },
+  "homepage": "https://github.com/ymf2317-tech/dsh-my-computer#readme",
+  "bugs": {
+    "url": "https://github.com/ymf2317-tech/dsh-my-computer/issues"
+  },
+  "engines": {
+    "node": ">=22.5.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+  },
+  "scripts": {
+    "smoke": "node tools/smoke.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    },
+    "manifestVersion": 1
+  }
+}
