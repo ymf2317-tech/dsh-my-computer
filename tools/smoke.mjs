@@ -120,7 +120,7 @@ console.log('  临时目录：' + TMP_DIR)
 
 section('路由注册')
 
-checkEqual('注册了 12 条路由', registered.length, 12)
+checkEqual('注册了 13 条路由', registered.length, 13)
 for (const route of registered) {
   const name = route.path.slice(route.path.lastIndexOf('/') + 1)
   const bodyModeOk = route.requestBody === 'buffered' || route.requestBody === 'streaming'
@@ -416,6 +416,44 @@ const movedMissing = await call('move', {
 })
 checkEqual('移动不存在的源 → 207（部分失败）', movedMissing.status, 207)
 check('失败项带 code', (movedMissing.data.failed || []).length === 1)
+
+section('GET /scan（分类视图的数据源）')
+
+// 铺一个已知形状的小目录：三层、每层混几种类型，用来验证分类和截断
+const scanRoot = path.join(TMP_DIR, 'scan-root')
+const scanSub = path.join(scanRoot, '子目录')
+const scanSub2 = path.join(scanRoot, '子目录', '二层')
+fs.mkdirSync(scanSub2, { recursive: true })
+fs.writeFileSync(path.join(scanRoot, 'a.png'), 'png')
+fs.writeFileSync(path.join(scanRoot, 'b.docx'), 'doc')
+fs.writeFileSync(path.join(scanRoot, 'c.7z'), 'zip')
+fs.writeFileSync(path.join(scanRoot, '子目录', 'd.mp4'), 'mp4')
+fs.writeFileSync(path.join(scanRoot, '子目录', '二层', 'e.pdf'), 'pdf')
+
+const scan0 = await call('scan', { query: q({ path: scanRoot, depth: 0 }) })
+checkEqual('/scan 状态码 200', scan0.status, 200)
+check('depth=0 只列本层文件（3 个）+ 1 个子目录', scan0.data.fileCount === 3 && scan0.data.dirCount === 1,
+  'files=' + scan0.data.fileCount + ' dirs=' + scan0.data.dirCount)
+check('depth=0 归出 image/document/archive 三类',
+  scan0.data.byCategory.image === 1 && scan0.data.byCategory.document === 1 && scan0.data.byCategory.archive === 1,
+  JSON.stringify(scan0.data.byCategory))
+check('每条带 category 与 rel', scan0.data.entries.every((e) => typeof e.category === 'string' && typeof e.rel === 'string'))
+
+const scan2 = await call('scan', { query: q({ path: scanRoot, depth: 2 }) })
+check('depth=2 能穿到二层子目录（5 个文件）', scan2.data.fileCount === 5, 'files=' + scan2.data.fileCount)
+check('深层的 pdf 也被归成 document（b.docx + e.pdf）', scan2.data.byCategory.document === 2, JSON.stringify(scan2.data.byCategory))
+check('跨层条目保留 rel 相对路径',
+  scan2.data.entries.some((e) => e.rel === path.win32.join('子目录', '二层', 'e.pdf')),
+  scan2.data.entries.map((e) => e.rel).join(' | '))
+check('depth 超上限被夹到 2', (await call('scan', { query: q({ path: scanRoot, depth: 9 }) })).data.depth === 2)
+
+const scanLimit = await call('scan', { query: q({ path: scanRoot, depth: 2, limit: 2 }) })
+check('limit 生效并标记 truncated', scanLimit.data.count === 2 && scanLimit.data.truncated === true,
+  'count=' + scanLimit.data.count + ' truncated=' + scanLimit.data.truncated)
+
+const scanBadType = await call('scan', { query: q({ path: path.join(scanRoot, 'a.png'), depth: 1 }) })
+checkEqual('/scan 对文件 → 400', scanBadType.status, 400)
+checkEqual('/scan 对文件 → NOT_DIRECTORY', scanBadType.data.error && scanBadType.data.error.code, 'NOT_DIRECTORY')
 
 section('GET /health')
 

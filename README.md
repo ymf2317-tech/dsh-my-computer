@@ -76,6 +76,7 @@ dsh-my-computer/
 | `/rename` | `POST /api/my-computer/rename` | POST | `{path,name}`，同目录改名，目标存在 409 |
 | `/delete` | `POST /api/my-computer/delete` | POST | `{paths:[...],confirm:true}`，递归删除，**没有 `confirm:true` 就 400**；拒绝删盘符根；部分失败返回 207 + `failed[]` |
 | `/move` | `POST /api/my-computer/move` | POST | `{sources:[...],targetDir}`，剪切粘贴；跨盘 `EXDEV` 自动退化成 复制+删除 |
+| `/scan` | `GET /api/my-computer/scan?path=D:\foo&depth=0` | GET | **分类视图的数据源**（0.3.0）。只读扫描，`depth` 0–2（超上限夹到 2）。每条带 `category`（image/video/audio/document/code/archive/app/other，目录为 `dir`）与 `rel`（相对当前目录）与 `level`。返回 `{ok,path,depth,entries,count,fileCount,dirCount,byCategory,truncated,maxLevelReached,dirsVisited,elapsedMs,unreadable}`。护栏：3000 条目 / 500 目录 / 6000 ms；符号链接只登记不下降 |
 | `/health` | `GET /api/my-computer/health` | GET | 自检：插件版本、node 版本、平台 |
 
 错误统一是 `{ok:false,error:{code,message}}` + 合适状态码（400/403/404/409/415/422/423/500/507/207）。所有 handler 都包在 try/catch 里，**任何异常都不会抛给宿主**，只会变成一条 `console.warn` 和一段 JSON。
@@ -102,7 +103,6 @@ dsh-my-computer/
 ## 4. 面板
 
 注册两处，都是 DSH 公开槽位：
-
 - **右栏 tab（主要入口）**：`ctx.sidebarRightTabs.register({ id: 'my-computer', kind: 'my-computer', title, guide: [...] })`，正文挂 `sidebar.right.pane.tab[key=my-computer]`，chip 标题挂 `sidebar.right.pane.tab.title`。`guide` 数组决定它是否出现在右栏「+」菜单里——**少了 guide 就不显示**，这是第一版踩过的坑。
 - **左栏面板（附加入口）**：`sidebar.panellist`（`id: my-computer`，`order: -5`）+ `main[key=my-computer]`。手机上它是整屏打开，桌面上进主栏。
 
@@ -122,6 +122,22 @@ dsh-my-computer/
 - **主题**：颜色全部走 `var(--dsw-alias-*)`，并在 `@media (prefers-color-scheme: dark)` 里给了暗色兜底，不会出现「白天一片死白、夜里闪瞎眼」
 
 窄屏优先：`@media (max-width:420px)` 压缩内边距与字号；根容器带 `min-height:calc(100dvh - 96px)` 兜底（DSH 主视图容器不保证有确定高度，只写 `height:100%` 会塌成 0）。
+
+### 4.1 双视图：目录 / 分类（0.3.0）
+
+第一行是两格开关 `目录 | 分类`，默认仍是原来的目录树。切到「分类」后，当前范围里的文件按类型分堆显示，**像手机自带的文件管理器那样**：
+
+- 堆的顺序与图标：文件夹 / 图片 / 视频 / 音频 / 文档 / 代码 / 压缩包 / 安装包 / 其他；每堆标题吸顶（滚动时一直看得见），右侧标项数，空堆不显示
+- **类型不收成一排按钮**：手机屏幕窄，一排 8 个分类按钮会挤爆，所以只有一个 `<select>`（「全部类型」，选项里带各类型计数）——用户明确要求过这一点
+- 第二个 `<select>` 是扫描范围：`仅本层`（默认，等价于原来的 `/list`）/ `含 1 层` / `含 2 层`
+- 跨层结果在副标题里带相对路径（`子目录\二层\e.pdf`），否则同名文件分不清
+- 文件夹单独一堆（只在本层、且「全部类型」时出现），否则切到分类就再也点不进子目录
+- 模式、分类、范围三个选择都写 `localStorage`（`dsh-my-computer:view-mode` / `:category` / `:scan-depth`），下次打开还是上次的样子
+- 截断时列表上方给黄条，写明「列到 N 项停下、扫了 M 个目录、耗时 X ms」，并提示怎么缩小范围
+
+**没有索引，也没有全盘扫描**：分类视图的数据源是 `GET /scan`，只扫当前目录（可选向下 1–2 层），每次进入即算，所以永远是最新的、也不需要监听文件变化。防护栏：条目 3000 / 目录 500 / 耗时 6000 ms 三道闸，任一超了就截断并返回 `truncated=true`；符号链接与 junction 只登记不下降（避免目录环）。
+
+分类表在宿主侧（`lib/index.js` 的 `CATEGORY_EXT`）维护，客户端只认 `category` 字段和自己的文案/图标，两边不重复维护扩展名。`.txt / .md / .log / .csv` 归「文档」而不是「代码」——用户找笔记时不会去代码堆里翻。
 
 ---
 
@@ -252,6 +268,8 @@ node tools/right-tab-check.mjs # client：右栏 tab 三件套（sidebarRightTab
 ---
 
 ## 9. 版本
+
+0.3.0 —— 目录 / 分类双视图：新增只读 `GET /scan`（可选下钻 1–2 层、带分类与相对路径、三道护栏），面板第一行加两格模式开关 + 类型下拉 + 范围下拉（明确不做一排分类按钮），分堆标题吸顶，跨层显示相对路径，截断时黄条提示；模式/类型/范围写入 localStorage。
 
 0.2.0 —— 整目录打包下载（`GET /download-dir`，自研流式 zip，不落临时文件）+ 面板接上剪切/粘贴（走 `POST /move`）+ 客户端与宿主版本对不上时给提示而不是 404。
 

@@ -396,6 +396,69 @@ if (React && main && typeof main.component === 'function') {
     check('图片预览渲染没抛异常', imgError === null, imgError ? String(imgError) : '')
     check('图片预览用了 <img>', img && img.tags.includes('img'))
     check('图片指向 /api/my-computer/download', img && img.components.length > 0)
+
+    // E) 分类视图（0.3.0 起）：/scan 的结果按类型分堆，堆标题吸顶
+    const scanEntries = [
+      { name: 'sub', path: 'D:\\dsh-workspace\\sub', rel: 'sub', level: 0, ext: '', kind: 'dir', size: null, mtime: Date.now(), category: 'dir' },
+      { name: 'a.png', path: 'D:\\dsh-workspace\\a.png', rel: 'a.png', level: 0, ext: '.png', kind: 'file', size: 1024, mtime: Date.now(), category: 'image' },
+      { name: 'b.jpg', path: 'D:\\dsh-workspace\\b.jpg', rel: 'b.jpg', level: 1, ext: '.jpg', kind: 'file', size: 2048, mtime: Date.now(), category: 'image' },
+      { name: 'c.pdf', path: 'D:\\dsh-workspace\\c.pdf', rel: 'c.pdf', level: 0, ext: '.pdf', kind: 'file', size: 4096, mtime: Date.now(), category: 'document' },
+      { name: 'd.zip', path: 'D:\\dsh-workspace\\d.zip', rel: 'd.zip', level: 0, ext: '.zip', kind: 'file', size: 8192, mtime: Date.now(), category: 'archive' },
+    ]
+    const categorySeed = (over) =>
+      baseSeed(null).concat([
+        null, // clip
+        'category', // mode
+        'all', // catFilter
+        0, // scanDepth
+        Object.assign(
+          {
+            ok: true,
+            path: 'D:\\dsh-workspace',
+            depth: 1,
+            entries: scanEntries,
+            count: scanEntries.length,
+            fileCount: 4,
+            dirCount: 1,
+            byCategory: { image: 2, document: 1, archive: 1 },
+            truncated: false,
+            elapsedMs: 3,
+            dirsVisited: 2,
+          },
+          over || {},
+        ),
+        false, // scanLoading
+        0, // scanTick
+        '', // hostVersion
+      ])
+
+    let cat = null
+    let catError = null
+    try {
+      cat = render(React.createElement(main.component, {}), { seed: categorySeed() })
+    } catch (error) {
+      catError = error
+    }
+    check('分类视图渲染没抛异常', catError === null, catError ? String(catError) : '')
+    check('分类视图有模式开关', cat && cat.classes.includes('mc-seg'))
+    check(
+      '分类视图有下拉栏而不是平铺按钮',
+      cat && cat.classes.filter((c) => c.indexOf('mc-select') === 0).length === 2,
+      cat ? cat.classes.filter((c) => c.indexOf('mc-select') === 0).length + ' 个 select' : '',
+    )
+    check('分类视图按类型分组（文件夹/图片/文档/压缩包 各一条）', cat && cat.classes.filter((c) => c === 'mc-group').length === 4,
+      cat ? cat.classes.filter((c) => c === 'mc-group').length + ' 组' : '')
+    check('分类视图的行数与扫描结果一致', cat && cat.classes.filter((c) => c === 'mc-row').length === scanEntries.length)
+    check('跨层文件带相对路径提示', cat && cat.classes.includes('mc-reldir'))
+
+    // F) 截断告警
+    let trunc = null
+    try {
+      trunc = render(React.createElement(main.component, {}), { seed: categorySeed({ truncated: true }) })
+    } catch (error) {
+      trunc = null
+    }
+    check('截断时给出告警', trunc && trunc.classes.includes('mc-warn'))
   }
 } else {
   console.log('  · 跳过渲染检查（没有 react 或没有拿到组件）')

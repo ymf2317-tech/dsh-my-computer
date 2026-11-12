@@ -1,7 +1,7 @@
 {
   "name": "dsh-my-computer",
-  "version": "0.2.0",
-  "description": "DSH Web 右栏「我的电脑」：远程浏览与操作整台 Windows 磁盘（跨盘符、不受会话工作区限制）",
+  "version": "0.3.0",
+  "description": "DSH Web 右栏「我的电脑」：远程浏览与操作整台 Windows 磁盘（跨盘符、不受会话工作区限制），含目录/分类双视图",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
